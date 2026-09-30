@@ -15,7 +15,8 @@ import {
   Image as ImageIcon,
   ChevronDown,
   ChevronUp,
-  AlertCircle
+  AlertCircle,
+  ShieldAlert
 } from 'lucide-react';
 import { RESTORATION_MODES, runClientSideRestoration, runReplicateRestoration } from '../lib/restorationEngine';
 import { uploadImageToStorage, saveRestorationRecord } from '../lib/supabase';
@@ -208,6 +209,7 @@ export default function RestorationStudio({ onRestorationSaved }) {
   // Render mode icon
   const renderModeIcon = (iconName) => {
     switch (iconName) {
+      case 'ShieldAlert': return <ShieldAlert className="w-5 h-5" />;
       case 'Sparkles': return <Sparkles className="w-5 h-5" />;
       case 'UserCheck': return <UserCheck className="w-5 h-5" />;
       case 'Palette': return <Palette className="w-5 h-5" />;

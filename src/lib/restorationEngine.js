@@ -8,6 +8,14 @@
 
 export const RESTORATION_MODES = [
   {
+    id: 'peeling_repair',
+    name: 'রঙ ওঠা ও গভীর দাগ মেরামত',
+    nameEn: 'Peeling & Inpainting Repair',
+    desc: 'ছবির যে অংশের রঙ বা প্রলেপ উঠে গেছে, সাদা ফাঙ্গাস ও গভীর দাগ ভরাট করে মসৃণ করে',
+    icon: 'ShieldAlert',
+    badge: 'সেরা ড্যামেজ ফিক্স'
+  },
+  {
     id: 'full_magic',
     name: 'সম্পূর্ণ ম্যাজিক রিস্টোরেশন',
     nameEn: 'Full Magic Restore',
@@ -64,7 +72,6 @@ export async function runReplicateRestoration({ imageUrl, mode, apiToken, onProg
 
   switch (mode) {
     case 'colorize':
-      // DeOldify
       modelVersion = 'ariel415el/deoldify:0da600ec2c6c21255e2d1d07ecb2e95a9757659556839352e00e008ebec992b1';
       input = {
         image: imageUrl,
@@ -72,10 +79,10 @@ export async function runReplicateRestoration({ imageUrl, mode, apiToken, onProg
       };
       break;
 
+    case 'peeling_repair':
     case 'face_restore':
     case 'full_magic':
     default:
-      // CodeFormer
       modelVersion = 'sczhou/codeformer:7de2ea26c616d5bf2245ad0d5e24f0ff9a6204578a5c87570b396e06b3a0e693';
       input = {
         image: imageUrl,
@@ -87,7 +94,6 @@ export async function runReplicateRestoration({ imageUrl, mode, apiToken, onProg
       break;
 
     case 'scratch_repair':
-      // GFPGAN
       modelVersion = 'tencentarc/gfpgan:9280e4d3a605b29254f14d0d440bd9ec47002d3809d5aae6b452ccbe57f5d7c5';
       input = {
         img: imageUrl,
@@ -97,7 +103,6 @@ export async function runReplicateRestoration({ imageUrl, mode, apiToken, onProg
       break;
 
     case 'hd_upscale':
-      // Real-ESRGAN
       modelVersion = 'nightmareai/real-esrgan:42fed1c4974146d4d2414e2be2c5277c7fcf05fcc3a73abf41610695738c1d7b';
       input = {
         image: imageUrl,
@@ -107,7 +112,6 @@ export async function runReplicateRestoration({ imageUrl, mode, apiToken, onProg
       break;
   }
 
-  // Use Replicate HTTP API directly via proxy or client call
   const response = await fetch('https://api.replicate.com/v1/predictions', {
     method: 'POST',
     headers: {
@@ -128,7 +132,6 @@ export async function runReplicateRestoration({ imageUrl, mode, apiToken, onProg
   let prediction = await response.json();
   onProgress?.('AI মডেল প্রসেসিং করছে...');
 
-  // Poll for completion
   const pollUrl = prediction.urls.get;
   while (prediction.status !== 'succeeded' && prediction.status !== 'failed' && prediction.status !== 'canceled') {
     await new Promise((res) => setTimeout(res, 1500));
@@ -158,7 +161,7 @@ export async function runClientSideRestoration({
   customSettings = null,
   onProgress
 }) {
-  onProgress?.('ছবি বিশ্লেষণ করা হচ্ছে...');
+  onProgress?.('ছবি ও ড্যামেজ বিশ্লেষণ করা হচ্ছে...');
 
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -175,9 +178,7 @@ export async function runClientSideRestoration({
   const data = imgData.data;
   const totalPixels = width * height;
 
-  onProgress?.('কনট্রাস্ট ও কালার হিস্টোগ্রাম সমান করা হচ্ছে...');
-
-  // Step 1: Detect luminance bounds (Min/Max stretching & Auto-levels)
+  // Step 1: Detect luminance bounds
   let minLum = 255;
   let maxLum = 0;
   let totalLum = 0;
@@ -190,28 +191,33 @@ export async function runClientSideRestoration({
   }
 
   const avgLum = totalLum / totalPixels;
-  const lumSpan = Math.max(1, maxLum - minLum);
 
-  // Settings defaults based on mode
+  // Step 2: Severe Peeling & White Flake Inpainting
+  if (mode === 'peeling_repair' || mode === 'full_magic' || mode === 'scratch_repair') {
+    onProgress?.('উঠে যাওয়া রঙ ও সাদা দাগগুলো ভরাট (Inpainting) করা হচ্ছে...');
+    applySeverePeelingInpaint(data, width, height);
+  }
+
+  // Step 3: Denoise & Scratch Softening if requested
   const settings = customSettings || {
-    contrast: mode === 'full_magic' ? 1.25 : (mode === 'face_restore' ? 1.2 : 1.15),
+    contrast: mode === 'peeling_repair' ? 1.35 : (mode === 'full_magic' ? 1.25 : 1.15),
     brightness: avgLum < 100 ? 1.12 : (avgLum > 180 ? 0.95 : 1.05),
-    sharpen: mode === 'face_restore' ? 0.8 : (mode === 'full_magic' ? 0.6 : 0.4),
-    colorize: mode === 'colorize' || mode === 'full_magic',
-    denoise: mode === 'scratch_repair' ? 0.7 : (mode === 'full_magic' ? 0.4 : 0.2),
-    vibrance: mode === 'colorize' ? 1.4 : 1.1
+    sharpen: mode === 'face_restore' ? 0.8 : (mode === 'peeling_repair' ? 0.7 : 0.5),
+    colorize: mode === 'colorize' || mode === 'full_magic' || mode === 'peeling_repair',
+    denoise: mode === 'scratch_repair' ? 0.7 : (mode === 'peeling_repair' ? 0.6 : 0.35),
+    vibrance: 1.2
   };
 
-  // Step 2: Denoise & Scratch Softening if needed
   if (settings.denoise > 0.3) {
     onProgress?.('স্ক্র্যাচ ও নয়েজ ফিল্টার প্রয়োগ করা হচ্ছে...');
     applySelectiveSmooth(data, width, height, settings.denoise);
   }
 
-  // Step 3: Contrast, Dynamic Range Stretching & Tone Remapping
-  onProgress?.('ডিটেইলস ও টোন উন্নত করা হচ্ছে...');
+  // Step 4: Contrast, Dynamic Range Stretching & Tone Remapping
+  onProgress?.('কালো ও কনট্রাস্ট পুনরুদ্ধার করা হচ্ছে...');
   const contrastFactor = settings.contrast;
   const brightnessFactor = settings.brightness;
+  const lumSpan = Math.max(1, maxLum - minLum);
 
   for (let i = 0; i < data.length; i += 4) {
     let r = data[i];
@@ -223,39 +229,57 @@ export async function runClientSideRestoration({
     g = ((g - minLum) / lumSpan) * 255;
     b = ((b - minLum) / lumSpan) * 255;
 
-    // Contrast & Brightness adjustment
-    r = ((r - 128) * contrastFactor + 128) * brightnessFactor;
-    g = ((g - 128) * contrastFactor + 128) * brightnessFactor;
-    b = ((b - 128) * contrastFactor + 128) * brightnessFactor;
+    // S-curve contrast and gamma
+    let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    let norm = lum / 255;
+    let enhanced = norm < 0.5 ? 2 * norm * norm : 1 - 2 * (1 - norm) * (1 - norm);
+    let target = enhanced * 255;
 
-    // Step 4: Intelligent Colorization for B&W / Sepia
+    r = ((r - 128) * contrastFactor + 128) * brightnessFactor * 0.4 + target * 0.6;
+    g = ((g - 128) * contrastFactor + 128) * brightnessFactor * 0.4 + target * 0.6;
+    b = ((b - 128) * contrastFactor + 128) * brightnessFactor * 0.4 + target * 0.6;
+
+    // Step 5: Intelligent Colorization
     if (settings.colorize) {
       const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-      
-      // Check if image is monochrome or sepia-faded
-      const isSepiaOrBW = Math.abs(r - g) < 25 && Math.abs(g - b) < 35;
+      const isSepiaOrBW = Math.abs(r - g) < 30 && Math.abs(g - b) < 40;
+
       if (isSepiaOrBW) {
-        // Multi-chromatic neural estimation based on luminance distribution:
-        // Shadows: Deep charcoal/navy/ambient cool tones (0-60)
-        // Mid-tones: Natural human skin tones, warmth, textiles (60-175)
-        // Highlights: Warm ivory/sky light (175-255)
-        if (gray < 65) {
-          // Shadow tones: slight rich cool undertone
-          r = gray * 0.95;
-          g = gray * 0.98;
-          b = gray * 1.08;
-        } else if (gray < 175) {
-          // Midtones: Healthy warm melanin / skin & earth warmth
-          const factor = (gray - 65) / 110;
-          r = gray * (1.14 + factor * 0.08);
-          g = gray * (0.98 + factor * 0.04);
-          b = gray * (0.86 - factor * 0.05);
+        // Pixel coordinates
+        const pixelIdx = i / 4;
+        const py = Math.floor(pixelIdx / width);
+        const px = pixelIdx % width;
+
+        // Portrait facial detection heuristic
+        const isUpperCenter = py > height * 0.05 && py < height * 0.35 && px > width * 0.20 && px < width * 0.80;
+
+        if (isUpperCenter && gray > 80 && gray < 210) {
+          // Warm South Asian skin tones
+          r = gray * 1.25 + 14;
+          g = gray * 1.05 + 4;
+          b = gray * 0.86 - 6;
+        } else if (py > height * 0.20 && py < height * 0.90 && px > width * 0.15 && px < width * 0.85) {
+          // Clothing/Saree area
+          if (gray < 85) {
+            r = gray * 1.15 + 6;
+            g = gray * 0.90;
+            b = gray * 0.94;
+          } else if (gray < 165) {
+            // Elegant rich maroon/crimson saree undertones
+            r = gray * 1.26 + 10;
+            g = gray * 0.86;
+            b = gray * 0.82;
+          } else {
+            // Highlights & light textiles
+            r = gray * 1.06;
+            g = gray * 1.04;
+            b = gray * 0.95;
+          }
         } else {
-          // Highlights: clean luminous sunlight
-          const factor = (gray - 175) / 80;
-          r = gray * (1.04 + factor * 0.02);
-          g = gray * (1.02);
-          b = gray * (0.96 + factor * 0.04);
+          // Ambient background
+          r = gray * 1.05 + 4;
+          g = gray * 0.98;
+          b = gray * 0.90 - 4;
         }
       }
     }
@@ -266,16 +290,15 @@ export async function runClientSideRestoration({
     data[i + 2] = Math.max(0, Math.min(255, b));
   }
 
-  // Step 5: Unsharp Mask / High-Pass Sharpness (Face restoration)
+  // Step 6: Unsharp Mask / High-Pass Sharpness
   if (settings.sharpen > 0) {
     onProgress?.('মুখমণ্ডল ও চোখ শার্প করা হচ্ছে...');
     applyUnsharpMask(data, width, height, settings.sharpen);
   }
 
   ctx.putImageData(imgData, 0, 0);
-
   onProgress?.('রিস্টোরেশন সম্পন্ন হচ্ছে...');
-  
+
   return new Promise((resolve) => {
     canvas.toBlob((blob) => {
       const restoredUrl = URL.createObjectURL(blob);
@@ -285,17 +308,59 @@ export async function runClientSideRestoration({
 }
 
 /**
+ * Severe Peeling & White Flake Inpainting Algorithm
+ * Automatically detects white peeling spots on dark/textured areas and inpaints them
+ */
+function applySeverePeelingInpaint(data, width, height) {
+  const copy = new Uint8ClampedArray(data);
+  const radius = 2; // 5x5 sliding window
+
+  for (let y = radius; y < height - radius; y++) {
+    for (let x = radius; x < width - radius; x++) {
+      const idx = (y * width + x) * 4;
+      const r = copy[idx];
+      const g = copy[idx + 1];
+      const b = copy[idx + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      const neighbors = [];
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nIdx = ((y + dy) * width + (x + dx)) * 4;
+          const nLum = 0.299 * copy[nIdx] + 0.587 * copy[nIdx + 1] + 0.114 * copy[nIdx + 2];
+          neighbors.push(nLum);
+        }
+      }
+
+      neighbors.sort((a, b) => a - b);
+      const medianLum = neighbors[Math.floor(neighbors.length / 2)];
+
+      // Detect white peeled pigment (lum significantly higher than neighborhood median)
+      const isFaceHighlight = (y < height * 0.35 && x > width * 0.25 && x < width * 0.75);
+      const threshold = isFaceHighlight ? 60 : 32;
+
+      if (lum - medianLum > threshold && lum > 105) {
+        const blendFactor = Math.min(0.9, (lum - medianLum) / 60);
+        for (let c = 0; c < 3; c++) {
+          data[idx + c] = Math.round(data[idx + c] * (1 - blendFactor) + (medianLum * blendFactor));
+        }
+      }
+    }
+  }
+}
+
+/**
  * High-pass Sharpening / Unsharp Mask filter
  */
 function applyUnsharpMask(data, width, height, amount = 0.5) {
   const copy = new Uint8ClampedArray(data);
-  const factor = amount * 1.4;
+  const factor = amount * 1.5;
 
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const idx = (y * width + x) * 4;
 
-      // Laplacian kernel
       for (let c = 0; c < 3; c++) {
         const center = copy[idx + c];
         const top = copy[((y - 1) * width + x) * 4 + c];
@@ -312,7 +377,7 @@ function applyUnsharpMask(data, width, height, amount = 0.5) {
 }
 
 /**
- * Selective edge-preserving smoother to remove scratches/creases
+ * Selective edge-preserving smoother
  */
 function applySelectiveSmooth(data, width, height, threshold = 0.5) {
   const copy = new Uint8ClampedArray(data);
@@ -330,8 +395,6 @@ function applySelectiveSmooth(data, width, height, threshold = 0.5) {
         const right = copy[(y * width + (x + 1)) * 4 + c];
 
         const avgSurrounding = (top + bottom + left + right) / 4;
-        
-        // If center pixel deviates sharply (like a dust speck or scratch crack), soften it
         if (Math.abs(center - avgSurrounding) > diffThreshold) {
           data[idx + c] = center * 0.4 + avgSurrounding * 0.6;
         }

@@ -1,5 +1,12 @@
 export const SAMPLE_PHOTOS = [
   {
+    id: 'sample-mother-child',
+    title: 'মা ও সন্তানের দুর্লভ ছবি (রঙ ওঠা ও দাগযুক্ত)',
+    desc: 'শাড়ির রঙ উঠে যাওয়া এবং সাদা দাগ ও স্ক্র্যাচযুক্ত ভিন্টেজ ছবি',
+    category: 'পারিবারিক',
+    url: '/samples/vintage_mother_child.jpg'
+  },
+  {
     id: 'sample-portrait',
     title: '১৯৫০-এর প্রতিকৃতি (Vintage Portrait)',
     desc: 'ঘোলাটে ও স্ক্র্যাচযুক্ত ভিন্টেজ পোর্ট্রেট',
